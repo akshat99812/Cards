@@ -4,18 +4,30 @@
 // Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
-generator client {
-  provider = "prisma-client-js"
-}
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id       Int    @id @default(autoincrement())
-  email    String @unique
-  password String
-  slug     String?
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Model for the Players table
+model Player {
+  player_id     Int           @id @default(autoincrement())
+  username      String        @unique
+  email         String        @unique
+  password      String
+  game_sessions GameSession[] @relation("PlayersPlayed")
+  games_won     GameSession[] @relation("GameWinner")
+}
+
+model GameSession {
+  gameID         String       @id @default(uuid())
+  game_timeStamp DateTime     @default(now())
+  winner         Player?      @relation("GameWinner", fields: [winnerId], references: [player_id])
+  winnerId       Int?         // Foreign key winner ke liye 
+  players_played Player[]     @relation("PlayersPlayed")
 }
