@@ -11,7 +11,7 @@ const server = createServer(app);
 app.use(cors());
 app.use(express.json());
 
-app.use("/user", userRouter);
+// app.use("/user", userRouter);
 
 const io = new Server(server, {
     cors: {
@@ -27,6 +27,14 @@ const queues:{[key:string]:any} = {
     6: []
 };
 //const ROOM_SIZE = 4; // Adjust the number to your room capacity
+
+const rooms: { [roomId: string]: any } = {}; // Keep track of rooms and lastPlayed data
+
+const getAllRooms = () => {
+    const rooms = Array.from(io.sockets.adapter.rooms.keys()); // Get all room IDs
+    const filteredRooms = rooms.filter(room => !io.sockets.adapter.sids.has(room)); // Filter out individual sockets
+    return filteredRooms;
+};
 
 // When a user connects
 io.on('connection', (socket) => {
@@ -67,17 +75,43 @@ io.on('connection', (socket) => {
     });
 
     // Handle player disconnection
+    // socket.on('disconnect', () => {
+    //     console.log(`Player disconnected: ${socket.id}`);
+    //     // Remove player from all queues
+    //     for (const size in queues) {
+    //         const index = queues[size].indexOf(socket.id);
+    //         if (index !== -1) {
+    //             queues[size].splice(index, 1);
+    //             console.log(`Player ${socket.id} removed from queue for room size ${size}. Current queue: ${queues[size]}`);
+    //         }
+    //     }
+    // });
+
+    // socket.on('disconnect', () => {
+    //     console.log(`Player disconnected: ${socket.id}`);
+    // });
+
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);
-        // Remove player from all queues
-        for (const size in queues) {
-            const index = queues[size].indexOf(socket.id);
-            if (index !== -1) {
-                queues[size].splice(index, 1);
-                console.log(`Player ${socket.id} removed from queue for room size ${size}. Current queue: ${queues[size]}`);
+    
+        // Check if player was in a room and handle accordingly
+        // e.g., check for roomId in rooms object and remove player from room
+        for (const roomId in rooms) {
+            const room = rooms[roomId];
+            const playerIndex = room.players.indexOf(socket.id);
+            if (playerIndex > -1) {
+                room.players.splice(playerIndex, 1); // Remove player from the room
+                console.log(`Player ${socket.id} removed from room ${roomId}`);
+            }
+    
+            // If the room is now empty, handle room deletion manually
+            if (room.players.length === 0) {
+                delete rooms[roomId];
+                console.log(`Room ${roomId} deleted because it's empty`);
             }
         }
     });
+    
 
 
     //starting game and distributing cards
@@ -95,6 +129,39 @@ io.on('connection', (socket) => {
         });
       });
 
+      // Handle when a user joins a room
+      socket.on('joinRoom', (roomId) => {
+        socket.join(roomId); // Make the player join the room
+        console.log(`Player ${socket.id} joined room ${roomId}`);
+    });
+
+
+      socket.on('playCard', (data) => {
+        let { roomId, player, card } = data;
+    
+        // If the roomId has the 'room-' prefix, remove it
+        // if (roomId.startsWith('room-')) {
+        //     roomId = roomId.replace('room-', ''); // Extract the actual roomId
+        // }
+    
+        // Broadcast to everyone in the room except the sender
+        socket.to(roomId).emit('lastPlayed', { player, card });
+    
+        console.log(`Player ${player} played ${card} in room ${roomId}`);
+        console.log('All rooms:', getAllRooms());
+    
+        const room = io.sockets.adapter.rooms.get(roomId);
+    
+        if (room) {
+            room.forEach((socketId) => {
+                io.to(socketId).emit("lastPlayed", { player, card });
+                console.log(`Player ${player} played ${card} in room ${roomId}`);
+            });
+        } else {
+            console.log(`Room ${roomId} not found`);
+        }
+    });
+    
 });
 // Basic route to check server status
 app.get('/', (req, res) => {
@@ -140,8 +207,6 @@ app.post('/getCards',(req:any,res:any)=>{
     for (let i = 0; i < remainingCards.length; i++) {
         playerCards[i].push(remainingCards[i]);
     }
-
-
     
     //sendingplayer cards to the leader of the room
     res.send(playerCards);
