@@ -40,128 +40,98 @@ const getAllRooms = () => {
 io.on('connection', (socket) => {
     console.log('A player connected: ' + socket.id);
 
-    // Handle joining a queue based on room size
     socket.on('join-queue', (roomSize: 3 | 4 | 5 | 6) => {
         if (queues[roomSize]) {
             queues[roomSize].push(socket.id);
             console.log(`Player ${socket.id} added to queue for room size ${roomSize}. Current queue: ${queues[roomSize]}`);
 
-            // Check if the queue has enough players to form a room
             if (queues[roomSize].length >= roomSize) {
-                const roomId = `room-${Math.random().toString(36).substring(2, 10)}`; // Generate random room id
-                const leaderId = queues[roomSize][0];                        // Set the leaderId to the first player in the queue
-                const playersInRoom = queues[roomSize].splice(0, roomSize); // Remove players from queue
+                const roomId = `room-${Math.random().toString(36).substring(2, 10)}`;
+                const leaderId = queues[roomSize][0];
+                const playersInRoom = queues[roomSize].splice(0, roomSize);
 
-                // Add players to the room and notify them
-                playersInRoom.forEach((playerId: string) => {
+                rooms[roomId] = { players: playersInRoom, currentTurn: 0 };
+
+                playersInRoom.forEach((playerId: string, index: number) => {
                     const playerSocket = io.sockets.sockets.get(playerId);
                     if (playerSocket) {
                         playerSocket.join(roomId);
-                        playerSocket.emit('room-joined', { roomId, players: playersInRoom , leaderId , playerId});
+                        playerSocket.emit('room-joined', { roomId, players: playersInRoom, leaderId, playerId });
                         console.log(`Player ${playerId} added to room ${roomId}`);
                     }
                 });
 
-                console.log(`Leader ${leaderId} added to room ${roomId}`);
-
-                //emit the leader id to all players in the room
-                //io.to(roomId).emit('leader-joined', { roomId, leaderId });
-
-                io.to(roomId).emit('start-game', `Game started in room: ${roomId} with ${roomSize} players` );
+                io.to(roomId).emit('start-game', `Game started in room: ${roomId} with ${roomSize} players`);
+                io.to(roomId).emit('turn', { roomId, playerId: leaderId });
+                console.log(`Leader ${leaderId} has the first turn in room ${roomId}`);
             }
         } else {
             console.error(`Invalid room size: ${roomSize}`);
         }
     });
 
+    // Handle player turn actions
+    socket.on('playCard', (data) => {
+        const { roomId, player, card } = data;
+        const room = rooms[roomId];
+
+        if (room && room.players[room.currentTurn] === player) {
+            io.to(roomId).emit('lastPlayed', { player, card });
+            console.log(`Player ${player} played ${card} in room ${roomId}`);
+            
+            // Advance turn to the next player
+            room.currentTurn = (room.currentTurn + 1) % room.players.length;
+            const nextPlayer = room.players[room.currentTurn];
+
+            io.to(roomId).emit('turn', { roomId, playerId: nextPlayer });
+            console.log(`Next turn is for player ${nextPlayer} in room ${roomId}`);
+        } else {
+            socket.emit('error', 'It is not your turn!');
+            console.error(`Player ${player} attempted to play out of turn in room ${roomId}`);
+        }
+    });
+
+    socket.on('skipTurn', (data) => {
+        const { roomId, player } = data;
+        const room = rooms[roomId];
+
+        if (room && room.players[room.currentTurn] === player) {
+            console.log(`Player ${player} skipped their turn in room ${roomId}`);
+            
+            // Advance to the next player
+            room.currentTurn = (room.currentTurn + 1) % room.players.length;
+            const nextPlayer = room.players[room.currentTurn];
+
+            // Notify the room of the next player's turn
+            console.log("contol reached");
+            io.to(roomId).emit('turn', { roomId, playerId: nextPlayer });
+            console.log(`Next turn is for player ${nextPlayer} in room ${roomId}`);
+        } else {
+            socket.emit('error', 'It is not your turn to skip!');
+            console.error(`Player ${player} attempted to skip out of turn in room ${roomId}`);
+        }
+    });
+
     // Handle player disconnection
-    // socket.on('disconnect', () => {
-    //     console.log(`Player disconnected: ${socket.id}`);
-    //     // Remove player from all queues
-    //     for (const size in queues) {
-    //         const index = queues[size].indexOf(socket.id);
-    //         if (index !== -1) {
-    //             queues[size].splice(index, 1);
-    //             console.log(`Player ${socket.id} removed from queue for room size ${size}. Current queue: ${queues[size]}`);
-    //         }
-    //     }
-    // });
-
-    // socket.on('disconnect', () => {
-    //     console.log(`Player disconnected: ${socket.id}`);
-    // });
-
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);
-    
-        // Check if player was in a room and handle accordingly
-        // e.g., check for roomId in rooms object and remove player from room
         for (const roomId in rooms) {
             const room = rooms[roomId];
             const playerIndex = room.players.indexOf(socket.id);
+
             if (playerIndex > -1) {
-                room.players.splice(playerIndex, 1); // Remove player from the room
+                room.players.splice(playerIndex, 1);
                 console.log(`Player ${socket.id} removed from room ${roomId}`);
-            }
-    
-            // If the room is now empty, handle room deletion manually
-            if (room.players.length === 0) {
-                delete rooms[roomId];
-                console.log(`Room ${roomId} deleted because it's empty`);
+
+                if (room.players.length === 0) {
+                    delete rooms[roomId];
+                    console.log(`Room ${roomId} deleted because it's empty`);
+                } else {
+                    room.currentTurn %= room.players.length; // Adjust turn if players leave
+                }
             }
         }
     });
-    
-
-
-    //starting game and distributing cards
-    socket.on('start-game', () => {
-
-    })
-
-    socket.on('queue-submit', (data) => {
-        console.log('Received queue submit:', data);
-    
-        // Emit to only players in the specific room
-        io.to(data.roomId).emit('queue-submit', {
-          queueId: data.queueId,
-          queueValue: data.queueValue,
-        });
-      });
-
-      // Handle when a user joins a room
-      socket.on('joinRoom', (roomId) => {
-        socket.join(roomId); // Make the player join the room
-        console.log(`Player ${socket.id} joined room ${roomId}`);
-    });
-
-
-      socket.on('playCard', (data) => {
-        let { roomId, player, card } = data;
-    
-        // If the roomId has the 'room-' prefix, remove it
-        // if (roomId.startsWith('room-')) {
-        //     roomId = roomId.replace('room-', ''); // Extract the actual roomId
-        // }
-    
-        // Broadcast to everyone in the room except the sender
-        socket.to(roomId).emit('lastPlayed', { player, card });
-    
-        console.log(`Player ${player} played ${card} in room ${roomId}`);
-        console.log('All rooms:', getAllRooms());
-    
-        const room = io.sockets.adapter.rooms.get(roomId);
-    
-        if (room) {
-            room.forEach((socketId) => {
-                io.to(socketId).emit("lastPlayed", { player, card });
-                console.log(`Player ${player} played ${card} in room ${roomId}`);
-            });
-        } else {
-            console.log(`Room ${roomId} not found`);
-        }
-    });
-    
 });
 // Basic route to check server status
 app.get('/', (req, res) => {
